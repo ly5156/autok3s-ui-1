@@ -6,7 +6,7 @@
         <template-filter :provider="currentProvider" @apply-template="handleApplyTemplate"></template-filter>
       </template>
     </page-header>
-    <loading :loading="loading || creating">
+    <loading :loading="loading || providerComponentLoading || creating">
       <!-- fake fields are a workaround for chrome autofill getting the wrong fields -->
       <input style="display: none" type="text" />
       <input style="display: none" type="password" />
@@ -27,12 +27,13 @@
           required
         />
       </div>
-      <component v-if="providerSchema.config && providerSchema.options" ref="formRef" :schema="providerSchema" :is="clusterFormComponent"></component>
-      <footer-actions>
-        <router-link :to="{name: 'ClusterExplorerCoreClusters'}" class="btn role-secondary">Cancel</router-link>
-        <k-button class="role-secondary" type="button" :loading="loading || creating" @click="showCliModal">Generate CLI Command</k-button>
-        <k-button class="bg-primary" type="button" :loading="loading || creating" @click="create">Create</k-button>
-      </footer-actions>
+      <component v-if="providerSchema.config && providerSchema.options" ref="formRef" :schema="providerSchema" :is="clusterFormComponent" v-model:loadingState="providerComponentLoading">
+        <footer-actions>
+          <router-link :to="{name: 'ClusterExplorerCoreClusters'}" class="btn role-secondary">Cancel</router-link>
+          <k-button class="role-secondary" type="button" :loading="loading || creating" @click="showCliModal">Generate CLI Command</k-button>
+          <k-button class="bg-primary" type="button" :loading="loading || creating" @click="create">Create</k-button>
+        </footer-actions>
+      </component>
       <k-alert v-for="(e, index) in formErrors" :key="index" type="error" :title="e"></k-alert>
       <k-alert v-for="(e, index) in errors" :key="index" type="error" :title="e"></k-alert>
     </loading>
@@ -40,7 +41,7 @@
   </div>
 </template>
 <script>
-import {computed, defineComponent, inject, reactive, ref, toRef, toRefs, watch} from 'vue'
+import {computed, defineComponent, inject, nextTick, reactive, ref, toRef, toRefs, watch} from 'vue'
 import { useRouter } from 'vue-router'
 import jsyaml from 'js-yaml'
 import PageHeader from '@/views/components/PageHeader.vue'
@@ -62,6 +63,7 @@ import { createCluster } from '@/api/cluster.js'
 import {capitalize} from 'lodash-es'
 import {stringify} from '@/utils/error.js'
 import { cloneDeep, saveCreatingCluster, overwriteSchemaDefaultValue } from '@/utils'
+import useProviderKeyMap from '@/views/composables/useProviderKeyMap.js'
 
 export default defineComponent({
   name: 'CreateCluster',
@@ -84,6 +86,7 @@ export default defineComponent({
     },
   },
   setup(props) {
+    const {providerKeyFieldMap} = useProviderKeyMap()
     const clusterStore = inject('clusterStore')
     const templateStore = inject('templateStore')
     const wmStore = inject('windowManagerStore')
@@ -109,6 +112,8 @@ export default defineComponent({
     const {loading: clusterLoading, error: loadClusterError, cluster} = useCluster(clusterId)
     const {loading: templateLoading, error: loadTemplateError, templates} = toRefs(templateStore.state)
 
+    const providerComponentLoading = ref(false)
+
     const loading = computed(() => {
       return providersLoading.value || clusterLoading.value || templateLoading.value
     })
@@ -126,6 +131,21 @@ export default defineComponent({
       return errors
     })
 
+    const triggKeysValidate = () => {
+      if (providerSchema.id === 'native') {
+        return
+      }
+      const {key, secret} = providerKeyFieldMap[providerSchema.id]
+      const k = providerSchema.options[key]?.default
+      const s = providerSchema.options[secret]?.default
+
+      if (k && s) {
+        nextTick(() => {
+          formRef.value?.validateKeys?.()
+        })
+      }
+    }
+
     const updateProviderSchema = (provider, defaultVal, excludeKeys) => {
       const schema = overwriteSchemaDefaultValue(provider, defaultVal, excludeKeys)
       name.value = schema.config.name.default
@@ -133,6 +153,7 @@ export default defineComponent({
       providerSchema.id = provider.id
       providerSchema.config = schema.config
       providerSchema.options = schema.options
+      triggKeysValidate()
     }
 
     const getProviderDefaultTemplate = (providerId) => {
@@ -385,6 +406,7 @@ export default defineComponent({
       showCliModal,
       cliModalVisible,
       clusterForm,
+      providerComponentLoading,
     }
   },
   components: {
