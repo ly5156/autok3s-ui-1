@@ -10,45 +10,68 @@
     <div class="k-combo-box__prefix" v-if="$slots.prefix">
       <slot name="prefix">{{prefix}}</slot>
     </div>
-    <dropdown class="k-combo-box__trigger" :option="popperOption" :append-to-body="false" :disabled="disabled" :lazy="false">
-      <input
-        autocomplete="off"
-        :disabled="disabled"
-        class="k-combo-box__input"
-        :class="{'k-combo-box--no-label': !label}"
-        :id="inputId"
-        :value="modelValue"
-        @input="$emit('update:modelValue', $event.target.value)"
-        v-bind="$attrs"
-        :placeholder="placeholder"
-        >
+    <div class="k-combo-box__trigger" ref="inputRef">
+      <template v-if="editable">
+        <input
+          autocomplete="off"
+          :disabled="disabled"
+          class="k-combo-box__input"
+          :class="{'k-combo-box--no-label': !label}"
+          :id="inputId"
+          :value="modelValue"
+          @input="$emit('update:modelValue', $event.target.value)"
+          v-bind="$attrs"
+          :placeholder="placeholder"
+          >
+      </template>
+      <template v-else>
+        <input
+          autocomplete="off"
+          :disabled="disabled"
+          class="k-combo-box__input"
+          :class="{'k-combo-box--no-label': !label}"
+          :id="inputId"
+          v-model="queryModel"
+          @focus="handleFocus"
+          @keydown.down.prevent="handleKeyDown"
+          @keydown.up.prevent="handleKeyUp"
+          @keydown.esc.stop.prevent="handleKeyESC"
+          @keydown.tab="handleKeyESC"
+          @keydown.enter.stop.prevent="handleKeyEnter"
+          v-bind="$attrs"
+          :placeholder="modelValue"
+          >
+      </template>
       <k-icon v-if="loading" type="loading"></k-icon>
       <k-icon v-else type="arrow-right-blod" direction="down"></k-icon>
-      <template #content>
+      <div ref="resultRef" class="k-combo-box-filter__content" :class="{'k-combo-box-filter--active': show}">
         <div v-if="loading">Loading ...</div>
-        <div v-else-if="options.length === 0">No Data</div>
-        <div v-else>
-          <dropdown-menu-item v-for="(v, index) in options"
+        <div v-else-if="filteredOptions.length === 0">No Data</div>
+        <dropdown-menu v-else>
+          <dropdown-menu-item v-for="(v, index) in filteredOptions"
             :key="index"
             class="k-combo-box__option"
-            :class="{'k-combo-box--selected': modelValue === v}"
+            :class="{'k-combo-box--selected': modelValue === v, 'k-combo-box-filter--hover': v === hoverOption}"
             @click="setValue(v)">
             {{v}}
-        </dropdown-menu-item>
-        </div>
-      </template>
-    </dropdown>
+          </dropdown-menu-item>
+        </dropdown-menu>
+      </div>
+    </div>
     <div class="k-combo-box__suffix" v-if="$slots.suffix">
       <slot name="suffix"></slot>
     </div>
   </div>
 </template>
 <script>
-import {computed, defineComponent, ref} from 'vue'
-import { Dropdown, DropdownMenuItem }from '@/components/Dropdown'
+import {computed, defineComponent, ref, customRef, watch, nextTick} from 'vue'
+import { Dropdown, DropdownMenu, DropdownMenuItem }from '@/components/Dropdown'
 import Tooltip from '@/components/Tooltip'
 import KIcon from '@/components/Icon'
 import {useIdGenerator} from '@/utils/idGenerator.js'
+import usePopper from '@/composables/usePopper.js'
+import useClickOutside from '@/composables/useClickOutside.js'
+
 const getId = useIdGenerator(0, 'combo-box_');
 const useMinWithModifier = (minWith = '200px') => {
   return {
@@ -99,20 +122,37 @@ export default defineComponent({
       default() {
         return []
       }
+    },
+    filterable: {
+      type: Boolean,
+      default: false,
+    },
+    editable: {
+      type: Boolean,
+      default: true,
     }
   },
   emits: ['update:modelValue'],
   setup(props, {emit, slots}) {
-    // const filteredOptions = computed(() => {
-    //   if (!props.modelValue) {
-    //     return props.options
-    //   }
-    //   return props.options.filter((v) => props.modelValue.indexOf(v) > -1)
-    // })
     const inputId = getId()
-    const setValue = (v) => {
-      emit('update:modelValue', v)
-    }
+    const show = ref(false)
+    const inputRef = ref(null)
+    const resultRef = ref(null)
+
+    const filteredOptions = computed(() => {
+      if (!props.filterable || !query.value) {
+        return props.options
+      }
+      const q = query.value
+      return props.options.filter((v) => v.indexOf(q) > -1)
+    })
+    const resultLength = computed(() => {
+      return filteredOptions.value.length
+    })
+    const hoverOption = computed(() => {
+      return filteredOptions.value[hoverIndex.value]
+    })
+
     const minWithModifier = useMinWithModifier()
     const popperOption = {
       modifiers: [
@@ -126,20 +166,126 @@ export default defineComponent({
       ],
       placement: 'bottom-start'
     }
+    const hoverIndex = ref(-1)
+    const { create, remove, update } = usePopper(inputRef, resultRef, popperOption)
+    const createPopper = () => {
+      create()
+      update()
+    }
+    watch(show, () => {
+      if (show.value) {
+        nextTick(() => {
+          createPopper()
+        })
+        return
+      }
+      remove()
+      hoverIndex.value = -1
+    })
+
+    useClickOutside(inputRef, () => {
+      show.value = false
+    })
+
+    const setValue = (v) => {
+      emit('update:modelValue', v)
+      show.value = false
+    }
+
+    const query = ref('')
+    const queryModel = computed({
+      get() {
+        if (show.value) {
+          return query.value
+        }
+        return props.modelValue
+      },
+      set(v) {
+        query.value = v
+      }
+    })
+
+    const handleFocus = () => {
+      query.value = ''
+      show.value = true
+    }
+    const handleKeyDown = () => {
+      if (!show.value) {
+        return
+      }
+      if (resultLength.value === 0) {
+        return
+      }
+      hoverIndex.value = (hoverIndex.value + 1) % resultLength.value
+    }
+    const handleKeyUp = () => {
+       if (!show.value) {
+        return
+      }
+      if (resultLength.value === 0) {
+        return
+      }
+      hoverIndex.value = (hoverIndex.value - 1 + resultLength.value) % resultLength.value
+    }
+    const handleKeyESC = () => {
+      show.value = false
+    }
+    const handleKeyEnter = () => {
+      if (!show.value) {
+        return
+      }
+      if (hoverOption.value) {
+        emit('update:modelValue', hoverOption.value)
+      }
+      inputRef.value.querySelector('input')?.blur()
+      show.value = false
+    }
+
     return {
       inputId,
       setValue,
       popperOption,
-      // filteredOptions,
+      query,
+      queryModel,
+      handleFocus,
+      filteredOptions,
+      inputRef,
+      resultRef,
+      show,
+      hoverOption,
+      handleKeyDown,
+      handleKeyUp,
+      handleKeyESC,
+      handleKeyEnter,
     }
   },
   components: {
     Dropdown,
+    DropdownMenu,
     DropdownMenuItem,
     Tooltip,
     KIcon,
   }
 })
+
+function useDebouncedRef(value, delay = 200) {
+  let timeout
+  return customRef((track, trigger) => {
+    return {
+      get() {
+        track()
+        return value
+      },
+      set(newValue) {
+        clearTimeout(timeout)
+        timeout = setTimeout(() => {
+          value = newValue
+          trigger()
+        }, delay)
+      }
+    }
+  })
+}
 </script>
 <style>
 .k-combo-box {
@@ -198,8 +344,26 @@ export default defineComponent({
 .k-combo-box--no-label {
   padding: 9px 0;
 }
-.k-combo-box--selected {
+.k-combo-box--selected, .k-combo-box-filter--hover {
   background-color: var(--dropdown-active-bg);
   color: var(--dropdown-active-text);
+}
+
+.k-combo-box-filter__content {
+  display: none;
+  position: absolute;
+  background-color: var(--dropdown-bg);
+  z-index: var(--popper-z-index);
+  border: 1px solid var(--dropdown-border);
+  border-radius: var(--border-radius);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  box-shadow: 0 5px 20px var(--shadow);
+  max-height: 60vh;
+  overflow: auto;
+  min-width: 324px;
+}
+.k-combo-box-filter--active {
+  display: block;
 }
 </style>
